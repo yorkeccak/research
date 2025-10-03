@@ -776,7 +776,7 @@ function HomeContent() {
                   }}
                   transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
                 >
-                  Ansley - here we go again. One last app 💪
+                  Research
                 </motion.h1>
 
                 {/* "By Valyu" that slides out from under */}

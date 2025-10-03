@@ -23,24 +23,24 @@ export const metadata: Metadata = {
     process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
   ),
   title: {
-    default: "Patents by Valyu",
-    template: "%s | Patents by Valyu",
+    default: "Research by Valyu",
+    template: "%s | Research by Valyu",
   },
   description:
     "AI-powered analysis by Valyu. Real-time data, secure Python execution in Daytona sandboxes, and interactive visualizations for research and reporting.",
-  applicationName: "Patents by Valyu",
+  applicationName: "Research by Valyu",
   openGraph: {
-    title: "Patents by Valyu",
+    title: "Research by Valyu",
     description:
       "AI-powered analysis by Valyu. Real-time data, secure Python execution in Daytona sandboxes, and interactive visualizations for research and reporting.",
     url: "/",
-    siteName: "Patents by Valyu",
+    siteName: "Research by Valyu",
     images: [
       {
         url: "/valyu.png",
         width: 1200,
         height: 630,
-        alt: "Patents by Valyu",
+        alt: "Research by Valyu",
       },
     ],
     locale: "en_US",
@@ -48,7 +48,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Patents by Valyu",
+    title: "Research by Valyu",
     description:
       "AI-powered analysis by Valyu. Real-time data, secure Python execution in Daytona sandboxes, and interactive visualizations for research and reporting.",
     images: ["/valyu.png"],

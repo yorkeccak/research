@@ -38,16 +38,16 @@ export async function GET(request: NextRequest) {
 
         // Search for international news from different countries and sources
         const newsQueries = [
-          "international news today",
-          "world news today",
-          "European news today",
-          "Asian news today",
-          "African news today",
-          "Latin American news today",
-          "Middle East news today",
-          "global politics today",
-          "international business news today",
-          "world sports news today",
+          "latest biomedical research news today",
+          "latest AI research news today",
+          "latest climate science research news today",
+          "latest neuroscience research news today",
+          "latest cancer research news today",
+          "latest renewable energy research news today",
+          "latest genetics research news today",
+          "latest materials science research news today",
+          "latest pharmaceutical research news today",
+          "latest public health research news today",
         ];
 
         console.log("Running news queries...");

@@ -315,7 +315,7 @@ function logDedupe(
   });
 }
 
-export const patentTools = {
+export const researchTools = {
   // File reading tools - allow the model to read user-provided files via URLs
   readTextFromUrl: tool({
     description:
@@ -1264,15 +1264,13 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
     },
   }),
 
-  USAfedSearch: tool({
+  researchSearch: tool({
     description:
-      "Search US federal spending data, contracts, and grants from authoritative government sources",
+      "Searches ArXiv, PubMed, and Wiley Finance resources for academic and scientific research",
     inputSchema: z.object({
       query: z
         .string()
-        .describe(
-          "Search query for US federal spending data, contracts, and grants"
-        ),
+        .describe("Search query for academic and scientific research"),
       maxResults: z
         .number()
         .min(1)
@@ -1286,44 +1284,42 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
       const sessionId = (options as any)?.experimental_context?.sessionId;
       const userTier = (options as any)?.experimental_context?.userTier;
       const isDevelopment = process.env.NEXT_PUBLIC_APP_MODE === "development";
+      const requestId = (options as any)?.experimental_context?.requestId;
 
       try {
         // Check if Valyu API key is available
         const apiKey = process.env.VALYU_API_KEY;
         if (!apiKey) {
-          return "❌ Valyu API key not configured. Please add VALYU_API_KEY to your environment variables to enable US federal spending data, contracts, and grants search.";
+          return "❌ Valyu API key not configured. Please add VALYU_API_KEY to your environment variables to enable Wiley search.";
         }
         const valyu = new Valyu(apiKey, "https://api.valyu.network/v1");
 
-        // Configure search options for patent sources
+        // Configure search options for Wiley sources
         const searchOptions: any = {
           maxNumResults: maxResults || 10,
-          includedSources: ["valyu/valyu-us-federal-spending"],
+          includedSources: [
+            "wiley/wiley-finance-papers",
+            "wiley/wiley-finance-books",
+            "valyu/valyu-arxiv",
+            "valyu/valyu-pubmed",
+          ],
         };
+        if (searchOptions.includedSources?.sort)
+          searchOptions.includedSources.sort();
 
-        console.log("[USAFedSearch] Search options:", searchOptions);
+        const sessionKey = buildToolKey("researchSearch", query, searchOptions);
+        const response = await withSessionMemo(sessionId, sessionKey, () =>
+          once(
+            "researchSearch",
+            canonQuery(query),
+            canonOptions(searchOptions),
+            () => valyu.search(query, searchOptions)
+          )
+        );
 
-        // Add timeout configuration to prevent hanging
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-        let response;
-        try {
-          response = await valyu.search(query, searchOptions);
-          clearTimeout(timeoutId);
-        } catch (error) {
-          clearTimeout(timeoutId);
-          if (error instanceof Error && error.name === "AbortError") {
-            throw new Error(
-              "Valyu API request timed out after 30 seconds. The API might be slow or unresponsive."
-            );
-          }
-          throw error;
-        }
-
-        // Track Valyu patent search call
+        // Track Valyu Wiley search call
         await track("Valyu API Call", {
-          toolType: "USAFedSearch",
+          toolType: "researchSearch",
           query: query,
           maxResults: maxResults || 10,
           resultCount: response?.results?.length || 0,
@@ -1343,16 +1339,19 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
             const polarTracker = new PolarEventTracker();
             const valyuCostDollars =
               (response as any)?.total_deduction_dollars || 0;
-            console.log("[USAFedSearch] Tracking Valyu API usage with Polar:", {
-              userId,
-              sessionId,
-              valyuCostDollars,
-              resultCount: response?.results?.length || 0,
-            });
+            console.log(
+              "[researchSearch] Tracking Valyu API usage with Polar:",
+              {
+                userId,
+                sessionId,
+                valyuCostDollars,
+                resultCount: response?.results?.length || 0,
+              }
+            );
             await polarTracker.trackValyuAPIUsage(
               userId,
               sessionId,
-              "USAFedSearch",
+              "researchSearch",
               valyuCostDollars,
               {
                 query,
@@ -1363,7 +1362,7 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
             );
           } catch (error) {
             console.error(
-              "[USAFedSearch] Failed to track Valyu API usage:",
+              "[researchSearch] Failed to track Valyu API usage:",
               error
             );
             // Don't fail the search if usage tracking fails
@@ -1371,34 +1370,46 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
         }
 
         if (!response || !response.results || response.results.length === 0) {
-          return `🔍 No US federal spending data, contracts, and grants results found for "${query}". Try rephrasing your search.`;
+          return `🔍 No research results found for "${query}". Try rephrasing your search.`;
         }
 
+        // Map and dedupe by canonical id
+        const mapped = (response?.results || []).map((r: any) => {
+          const pmid = r.metadata?.pmid ? String(r.metadata.pmid) : undefined;
+          const doi =
+            extractDoi(r.metadata?.doi) ||
+            extractDoi(r.url) ||
+            extractDoi(r.content);
+          const arxiv = extractArxivId(r.url);
+          const normalized = normalizeUrl(r.url);
+          const key = pmid || doi || arxiv || normalized;
+          return {
+            id: key ? keyToUuid(key) : resultId(r),
+            title: r.title || "Research Result",
+            url: r.url,
+            content: r.content,
+            date: r.metadata?.date,
+            source: r.metadata?.source,
+            dataType: r.data_type,
+            length: r.length,
+            image_url: r.image_url || {},
+            relevance_score: r.relevance_score,
+          };
+        });
+        const unique = dedupeBy(mapped, (x) => x.id);
+        const final = dedupeAgainstRequest(requestId, unique, (x) => x.id);
+
         // Return structured data for the model to process
-        const formattedResponse = {
-          type: "us_federal_spending_search",
-          query: query,
-          resultCount: response.results.length,
-          results: response.results.map((result: any) => ({
-            title: result.title || "US Federal Spending Result",
-            url: result.url,
-            content: result.content,
-            date: result.metadata?.date,
-            source: result.metadata?.source,
-            dataType: result.data_type,
-            length: result.length,
-            image_url: result.image_url || {},
-            relevance_score: result.relevance_score,
-          })),
-        };
-
-        console.log(
-          "[USAFedSearch] Formatted response size:",
-          JSON.stringify(formattedResponse).length,
-          "bytes"
+        return JSON.stringify(
+          {
+            type: "research_search",
+            query: query,
+            resultCount: final.length,
+            results: final,
+          },
+          null,
+          2
         );
-
-        return JSON.stringify(formattedResponse, null, 2);
       } catch (error) {
         if (error instanceof Error) {
           if (
@@ -1418,24 +1429,39 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
           }
         }
 
-        return `❌ Error searching US federal spending data, contracts, and grants data: ${
+        return `❌ Error searching research data: ${
           error instanceof Error ? error.message : "Unknown error"
         }`;
       }
     },
   }),
 
-  webSearch: tool({
+  clinicalTrialsSearch: tool({
     description:
-      "Search the web for general information on any topic using Valyu DeepSearch API with access to both proprietary sources and web content",
+      "Search for clinical trials based on conditions, drugs, or research criteria using ClinicalTrials.gov data",
     inputSchema: z.object({
       query: z
         .string()
         .describe(
-          'Search query for any topic (e.g., "benefits of renewable energy", "latest AI developments", "climate change solutions")'
+          'Clinical trials search query (e.g., "Phase 3 melanoma immunotherapy", "COVID-19 vaccine trials", "CRISPR gene therapy")'
         ),
+      maxResults: z
+        .number()
+        .min(1)
+        .max(20)
+        .optional()
+        .default(10)
+        .describe("Maximum number of results to return"),
+      startDate: z
+        .string()
+        .optional()
+        .describe("Start date filter in MM-DD-YYYY format"),
+      endDate: z
+        .string()
+        .optional()
+        .describe("End date filter in MM-DD-YYYY format"),
     }),
-    execute: async ({ query }, options) => {
+    execute: async ({ query, maxResults, startDate, endDate }, options) => {
       const userId = (options as any)?.experimental_context?.userId;
       const sessionId = (options as any)?.experimental_context?.sessionId;
       const userTier = (options as any)?.experimental_context?.userTier;
@@ -1443,67 +1469,73 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
       const requestId = (options as any)?.experimental_context?.requestId;
 
       try {
-        // Initialize Valyu client (uses default/free tier if no API key)
-        const valyu = new Valyu(
-          process.env.VALYU_API_KEY,
-          "https://api.valyu.network/v1"
-        );
+        const apiKey = process.env.VALYU_API_KEY;
+        if (!apiKey) {
+          return "❌ Valyu API key not configured. Please add VALYU_API_KEY to your environment variables to enable clinical trials search.";
+        }
+        const valyu = new Valyu(apiKey, "https://api.valyu.network/v1");
 
-        // Configure search options
-        const searchOptions = {
-          searchType: "all" as const, // Search both proprietary and web sources
+        // Always request 6 results for UI display, but we'll limit what we send to the model
+        const searchOptions: any = {
+          maxNumResults: 6, // Fixed at 6 for UI display
+          searchType: "proprietary",
+          includedSources: ["valyu/valyu-clinical-trials"],
+          relevanceThreshold: 0.4,
+          isToolCall: true,
         };
+        if (searchOptions.includedSources?.sort)
+          searchOptions.includedSources.sort();
 
-        // Use per-session memo + in-flight dedupe
-        const sessionKey = buildToolKey("webSearch", query, searchOptions);
+        if (startDate) searchOptions.startDate = startDate;
+        if (endDate) searchOptions.endDate = endDate;
+
+        const sessionKey = buildToolKey(
+          "clinicalTrialsSearch",
+          query,
+          searchOptions
+        );
         const response = await withSessionMemo(sessionId, sessionKey, () =>
           once(
-            "webSearch",
+            "clinicalTrialsSearch",
             canonQuery(query),
             canonOptions(searchOptions),
             () => valyu.search(query, searchOptions)
           )
         );
 
-        // Attach canonical id (DOI -> arXiv -> URL) mapped to deterministic UUIDs
-        const mapped = (response?.results || []).map((r: any) => {
-          const doi = extractDoi(r.url) || extractDoi(r.content);
-          const arxiv = extractArxivId(r.url);
-          const normalized = normalizeUrl(r.url);
-          const key = doi || arxiv || normalized;
+        const mapped = response.results.map((r: any) => {
+          const key = r.nct_id || r.data?.nct_id;
           return {
             id: key ? keyToUuid(key) : resultId(r),
-            title: r.title || "Web Result",
+            title: r.title,
             url: r.url,
             content: r.content,
             date: r.metadata?.date,
-            source: r.metadata?.source,
-            dataType: r.data_type,
-            length: r.length,
-            image_url: r.image_url || {},
-            relevance_score: r.relevance_score,
+            source: r.metadata?.source || r.source,
           };
         });
 
         const unique = dedupeBy(mapped, (x) => x.id);
         const final = dedupeAgainstRequest(requestId, unique, (x) => x.id);
+        logDedupe(
+          "clinicalTrialsSearch",
+          requestId,
+          response?.results?.length || 0,
+          mapped.length,
+          unique.length,
+          final
+        );
 
-        // Track Valyu web search call
         await track("Valyu API Call", {
-          toolType: "webSearch",
+          toolType: "clinicalTrialsSearch",
           query: query,
-          maxResults: 10,
+          maxResults: maxResults || 10,
           resultCount: final.length || 0,
-          hasApiKey: !!process.env.VALYU_API_KEY,
-          cost:
-            (response as any)?.metadata?.totalCost ||
-            (response as any)?.total_deduction_dollars ||
-            null,
-          searchTime: (response as any)?.metadata?.searchTime || null,
+          hasApiKey: !!apiKey,
+          cost: (response as any)?.total_deduction_dollars || null,
           txId: (response as any)?.tx_id || null,
         });
 
-        // Track usage for pay-per-use customers with Polar events
         if (
           userId &&
           sessionId &&
@@ -1512,97 +1544,97 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
         ) {
           try {
             const polarTracker = new PolarEventTracker();
-            // Use the actual Valyu API cost from response
             const valyuCostDollars =
               (response as any)?.total_deduction_dollars || 0;
-
-            console.log("[WebSearch] Tracking Valyu API usage with Polar:", {
-              userId,
-              sessionId,
-              valyuCostDollars,
-              resultCount: response?.results?.length || 0,
-            });
-
             await polarTracker.trackValyuAPIUsage(
               userId,
               sessionId,
-              "webSearch",
+              "clinicalTrialsSearch",
               valyuCostDollars,
               {
                 query,
-                resultCount: response?.results?.length || 0,
+                resultCount: final.length || 0,
                 success: true,
                 tx_id: (response as any)?.tx_id,
-                search_time: (response as any)?.metadata?.searchTime,
               }
             );
           } catch (error) {
             console.error(
-              "[WebSearch] Failed to track Valyu API usage:",
+              "[ClinicalTrialsSearch] Failed to track Valyu API usage:",
               error
             );
-            // Don't fail the search if usage tracking fails
           }
         }
 
-        // Log the full API response for debugging
-        console.log(
-          "[Web Search] Full API Response:",
-          JSON.stringify(response, null, 2)
-        );
-
-        if (
-          !response ||
-          !response.results ||
-          response.results.length === 0 ||
-          final.length === 0
-        ) {
-          return `🔍 No web results found for "${query}". Try rephrasing your search with different keywords.`;
+        if (!response || !response.results || response.results.length === 0) {
+          return JSON.stringify(
+            {
+              type: "clinical_trials",
+              query: query,
+              resultCount: final.length,
+              results: final,
+              message: `No clinical trials found for "${query}". Try using different search terms or checking ClinicalTrials.gov directly.`,
+            },
+            null,
+            2
+          );
         }
 
-        // Log key information about the search
-        const metadata = (response as any).metadata;
-        console.log("[Web Search] Summary:", {
-          query,
-          resultCount: final.length,
-          totalCost:
-            metadata?.totalCost ||
-            (response as any).total_deduction_dollars ||
-            "N/A",
-          searchTime: metadata?.searchTime || "N/A",
-          txId: (response as any).tx_id || "N/A",
-          firstResultTitle: final[0]?.title,
-          firstResultLength: final[0]?.length,
-        });
+        // Extract overview information for each trial
+        const extractOverview = (content: string) => {
+          try {
+            const data = JSON.parse(content);
 
-        // Return structured data for the model to process
-        const formattedResponse = {
-          type: "web_search",
-          query: query,
-          resultCount: final.length,
-          metadata: {
-            totalCost: metadata?.totalCost,
-            searchTime: metadata?.searchTime,
-          },
-          results: final.map((result: any) => ({
-            id: result.id,
-            title: result.title || "Web Result",
-            url: result.url,
-            content: result.content,
-            date: result.date,
-            source: result.source,
-            dataType: result.dataType,
-            length: result.length,
-            image_url: result.image_url || {},
-            relevance_score: result.relevance_score,
-          })),
+            // Return just the key overview fields
+            return {
+              nct_id: data.nct_id,
+              title: data.brief_title || data.official_title,
+              status: data.overall_status,
+              phase: data.phases,
+              enrollment: data.enrollment_count,
+              conditions: data.conditions,
+              // Keep full brief summary - this is the most important part
+              brief_summary: data.brief_summary || "No summary available",
+              // Just the names of interventions
+              interventions: data.interventions
+                ? data.interventions
+                    .slice(0, 3)
+                    .map((i: any) => i.name)
+                    .filter(Boolean)
+                : [],
+              start_date: data.start_date,
+              completion_date: data.completion_date,
+            };
+          } catch (e) {
+            console.error("Failed to parse clinical trial data:", e);
+            return null;
+          }
         };
 
-        console.log(
-          "[Web Search] Formatted response size:",
-          JSON.stringify(formattedResponse).length,
-          "bytes"
-        );
+        // Create overview version for both model and UI
+        const overviewResults = response.results
+          .map((result: any) => {
+            const overview = extractOverview(result.content);
+            if (!overview) return null;
+
+            return {
+              ...overview,
+              url: result.url,
+              source: "valyu/valyu-clinical-trials",
+              dataType: "clinical_trials",
+              relevance_score: result.relevance_score,
+            };
+          })
+          .filter(Boolean);
+
+        // Return overview results - this is what both model and UI will use
+        const formattedResponse = {
+          type: "clinical_trials_overview",
+          query: query,
+          resultCount: overviewResults.length,
+          results: overviewResults,
+          note: `Found ${overviewResults.length} clinical trials. Use 'getClinicalTrialDetails' tool with NCT ID for full details of any specific trial.`,
+        };
 
         return JSON.stringify(formattedResponse, null, 2);
       } catch (error) {
@@ -1611,26 +1643,180 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
             error.message.includes("401") ||
             error.message.includes("unauthorized")
           ) {
-            return "🔐 Authentication error with Valyu API. Please check your configuration.";
+            return "🔐 Invalid Valyu API key. Please check your VALYU_API_KEY environment variable.";
           }
-          if (error.message.includes("429")) {
-            return "⏱️ Rate limit exceeded. Please try again in a moment.";
-          }
-          if (
-            error.message.includes("network") ||
-            error.message.includes("fetch")
-          ) {
-            return "🌐 Network error connecting to Valyu API. Please check your internet connection.";
-          }
-          if (
-            error.message.includes("price") ||
-            error.message.includes("cost")
-          ) {
-            return "💰 Search cost exceeded maximum budget. Try reducing maxPrice or using more specific queries.";
+        }
+        return `❌ Error searching clinical trials: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`;
+      }
+    },
+  }),
+
+  getClinicalTrialDetails: tool({
+    description:
+      "Get full detailed information about a specific clinical trial using its NCT ID. Use this after finding trials with clinicalTrialsSearch to dive deeper into specific trials.",
+    inputSchema: z.object({
+      nctId: z.string().describe("The NCT ID of the clinical trial"),
+    }),
+    execute: async ({ nctId }, options) => {
+      const userId = (options as any)?.experimental_context?.userId;
+      const sessionId = (options as any)?.experimental_context?.sessionId;
+      const userTier = (options as any)?.experimental_context?.userTier;
+      const isDevelopment = process.env.NEXT_PUBLIC_APP_MODE === "development";
+      const requestId = (options as any)?.experimental_context?.requestId;
+
+      try {
+        const apiKey = process.env.VALYU_API_KEY;
+        if (!apiKey) {
+          return "❌ Valyu API key not configured. Please add VALYU_API_KEY to your environment variables.";
+        }
+        const valyu = new Valyu(apiKey, "https://api.valyu.network/v1");
+
+        // Search for the specific NCT ID
+        const searchOptions: any = {
+          maxNumResults: 5,
+          searchType: "proprietary",
+          includedSources: ["valyu/valyu-clinical-trials"],
+          relevanceThreshold: 0.1, // Lower threshold since we're looking for exact match
+          isToolCall: true,
+        };
+        if (searchOptions.includedSources?.sort)
+          searchOptions.includedSources.sort();
+
+        const sessionKey = buildToolKey(
+          "getClinicalTrialDetails",
+          nctId,
+          searchOptions
+        );
+        const response = await withSessionMemo(sessionId, sessionKey, () =>
+          once(
+            "getClinicalTrialDetails",
+            canonQuery(nctId),
+            canonOptions(searchOptions),
+            () => valyu.search(`clinical trial: ${nctId}`, searchOptions)
+          )
+        );
+
+        const mapped = response.results.map((r: any) => {
+          const key = r.nct_id || r.metadata?.nct_id;
+          return {
+            id: key ? keyToUuid(key) : resultId(r),
+            title: r.title,
+            url: r.url,
+            content: r.content,
+            date: r.metadata?.date,
+            source: r.metadata?.source || r.source,
+          };
+        });
+
+        const unique = dedupeBy(mapped, (x) => x.id);
+        const final = dedupeAgainstRequest(requestId, unique, (x) => x.id);
+        logDedupe(
+          "getClinicalTrialDetails",
+          requestId,
+          response?.results?.length || 0,
+          mapped.length,
+          unique.length,
+          final
+        );
+
+        await track("Valyu API Call", {
+          toolType: "getClinicalTrialDetails",
+          nctId: nctId,
+          resultCount: response?.results?.length || 0,
+          hasApiKey: !!apiKey,
+          cost: (response as any)?.total_deduction_dollars || null,
+          txId: (response as any)?.tx_id || null,
+        });
+
+        if (
+          userId &&
+          sessionId &&
+          userTier === "pay_per_use" &&
+          !isDevelopment
+        ) {
+          try {
+            const polarTracker = new PolarEventTracker();
+            const valyuCostDollars =
+              (response as any)?.total_deduction_dollars || 0;
+            await polarTracker.trackValyuAPIUsage(
+              userId,
+              sessionId,
+              "getClinicalTrialDetails",
+              valyuCostDollars,
+              {
+                nctId,
+                resultCount: response?.results?.length || 0,
+                success: true,
+                tx_id: (response as any)?.tx_id,
+              }
+            );
+          } catch (error) {
+            console.error(
+              "[GetClinicalTrialDetails] Failed to track Valyu API usage:",
+              error
+            );
           }
         }
 
-        return `❌ Error performing web search: ${
+        if (!response || !response.results || response.results.length === 0) {
+          return JSON.stringify(
+            {
+              type: "clinical_trial_details",
+              nctId: nctId,
+              found: false,
+              message: `No clinical trial found with NCT ID: ${nctId}`,
+            },
+            null,
+            2
+          );
+        }
+
+        // Parse the full trial data
+        const result = response.results[0];
+        let trialData;
+        try {
+          trialData = JSON.parse(result.content);
+        } catch (e) {
+          // If parsing fails, return the raw content
+          return JSON.stringify(
+            {
+              type: "clinical_trial_details",
+              nctId: nctId,
+              found: true,
+              title: result.title,
+              url: result.url,
+              content: result.content,
+              note: "Raw content provided - parsing failed",
+            },
+            null,
+            2
+          );
+        }
+
+        // Return the full parsed trial data
+        const formattedResponse = {
+          type: "clinical_trial_details",
+          nctId: nctId,
+          found: true,
+          title: result.title,
+          url: result.url,
+          data: trialData, // Full trial data
+          note: `Full details for clinical trial ${nctId}`,
+        };
+
+        return JSON.stringify(formattedResponse, null, 2);
+      } catch (error) {
+        if (error instanceof Error) {
+          if (
+            error.message.includes("401") ||
+            error.message.includes("unauthorized")
+          ) {
+            return "🔐 Invalid Valyu API key. Please check your VALYU_API_KEY environment variable.";
+          }
+        }
+        return `❌ Error fetching clinical trial details: ${
           error instanceof Error ? error.message : "Unknown error"
         }`;
       }
@@ -1639,4 +1825,4 @@ ${escapeModuleTag(execution.result || "(No output produced)")}
 };
 
 // Export with both names for compatibility
-export const financeTools = patentTools;
+export const financeTools = researchTools;
