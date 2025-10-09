@@ -44,46 +44,143 @@ export async function POST(req: Request) {
 
     // If attachments are present, decode and append them to the last user message as AI SDK parts
     try {
-      if (
-        Array.isArray(attachments) &&
-        attachments.length > 0 &&
-        Array.isArray(messages) &&
-        messages.length > 0
-      ) {
+      if (Array.isArray(messages) && messages.length > 0) {
         const lastIdx = messages.map((m: any) => m.role).lastIndexOf("user");
         const targetIdx = lastIdx >= 0 ? lastIdx : messages.length - 1;
         const target = messages[targetIdx] as any;
 
-        const decodedParts = attachments.map((att: any) => {
-          const data = Buffer.from(att.dataBase64 || "", "base64");
-          if (att.kind === "image") {
-            return {
-              type: "image",
-              image: data,
-              mimeType: att.mediaType || "image/png",
-            };
+        const normalizeMessageParts = () => {
+          if (Array.isArray(target.parts)) {
+            return target.parts;
           }
-          return {
-            type: "file",
-            data,
-            mediaType: att.mediaType || "application/octet-stream",
-            filename: att.name || undefined,
-          };
-        });
+          if (Array.isArray(target.content)) {
+            const cloned = (target.content as any[]).map((part: any) =>
+              part && typeof part === "object" ? { ...part } : part
+            );
+            target.parts = cloned;
+            delete target.content;
+            return target.parts;
+          }
+          if (typeof target.content === "string") {
+            target.parts = [{ type: "text", text: target.content }];
+            delete target.content;
+            return target.parts;
+          }
+          if (typeof target.text === "string") {
+            target.parts = [{ type: "text", text: target.text }];
+            delete target.text;
+            return target.parts;
+          }
+          target.parts = Array.isArray(target.parts) ? target.parts : [];
+          return target.parts;
+        };
 
-        if (Array.isArray(target.parts)) {
-          target.parts = [...target.parts, ...decodedParts];
-        } else if (typeof target.content === "string") {
-          target.parts = [
-            { type: "text", text: target.content },
-            ...decodedParts,
-          ];
-          delete target.content;
-        } else if (Array.isArray(target.content)) {
-          // Some formats may already be content array
-          target.content = [...target.content, ...decodedParts];
-        } else {
-          target.parts = decodedParts;
+        const hasEmbeddedBase64 =
+          (Array.isArray(target.parts) &&
+            target.parts.some(
+              (part: any) =>
+                part &&
+                typeof part === "object" &&
+                typeof part.dataBase64 === "string" &&
+                part.dataBase64.length > 0
+            )) ||
+          (Array.isArray(target.content) &&
+            target.content.some(
+              (part: any) =>
+                part &&
+                typeof part === "object" &&
+                typeof part.dataBase64 === "string" &&
+                part.dataBase64.length > 0
+            ));
+
+        let embeddedConverted = false;
+
+        if (
+          (Array.isArray(attachments) && attachments.length > 0) ||
+          hasEmbeddedBase64
+        ) {
+          const partsArray = normalizeMessageParts();
+
+          if (Array.isArray(partsArray)) {
+            const convertedParts = partsArray.map((part: any) => {
+              if (
+                part &&
+                typeof part === "object" &&
+                typeof part.dataBase64 === "string" &&
+                part.dataBase64.length > 0
+              ) {
+                const data = Buffer.from(part.dataBase64, "base64");
+                embeddedConverted = true;
+
+                if (part.type === "image") {
+                  const { dataBase64, mimeType, mediaType, ...rest } = part;
+                  return {
+                    ...rest,
+                    type: "image",
+                    image: data,
+                    mimeType: mimeType || mediaType || "image/png",
+                  };
+                }
+
+                if (part.type === "file") {
+                  const { dataBase64, ...rest } = part;
+                  return {
+                    ...rest,
+                    type: "file",
+                    data,
+                    mediaType: part.mediaType || "application/octet-stream",
+                    filename: part.filename || part.name,
+                  };
+                }
+              }
+              return part;
+            });
+
+            target.parts = convertedParts.map((part: any) => {
+              if (part && typeof part === "object" && "dataBase64" in part) {
+                const { dataBase64, ...rest } = part;
+                return rest;
+              }
+              return part;
+            });
+          }
+        }
+
+        if (
+          Array.isArray(attachments) &&
+          attachments.length > 0 &&
+          !embeddedConverted
+        ) {
+          const decodedParts = attachments.map((att: any) => {
+            const data = Buffer.from(att.dataBase64 || "", "base64");
+            if (att.kind === "image") {
+              return {
+                type: "image",
+                image: data,
+                mimeType: att.mediaType || "image/png",
+              };
+            }
+            return {
+              type: "file",
+              data,
+              mediaType: att.mediaType || "application/octet-stream",
+              filename: att.name || undefined,
+            };
+          });
+
+          if (Array.isArray(target.parts)) {
+            target.parts = [...target.parts, ...decodedParts];
+          } else if (typeof target.content === "string") {
+            target.parts = [
+              { type: "text", text: target.content },
+              ...decodedParts,
+            ];
+            delete target.content;
+          } else if (Array.isArray(target.content)) {
+            target.content = [...target.content, ...decodedParts];
+          } else {
+            target.parts = decodedParts;
+          }
         }
       }
     } catch (e) {
@@ -726,10 +823,32 @@ async function saveMessageToSession(
     }
 
     // Ensure content is properly formatted for database storage
-    const contentData = {
-      parts: content,
-      contextResources: message.contextResources || null,
-    };
+    const contentData = content;
+
+    const existingTokenUsage =
+      message.token_usage ?? message.tokenUsage ?? null;
+
+    let tokenUsagePayload: any =
+      existingTokenUsage && typeof existingTokenUsage === "object"
+        ? { ...existingTokenUsage }
+        : existingTokenUsage ?? null;
+
+    if (message.contextResources) {
+      if (
+        tokenUsagePayload &&
+        typeof tokenUsagePayload === "object" &&
+        !Array.isArray(tokenUsagePayload)
+      ) {
+        tokenUsagePayload = {
+          ...tokenUsagePayload,
+          contextResources: message.contextResources,
+        };
+      } else {
+        tokenUsagePayload = {
+          contextResources: message.contextResources,
+        };
+      }
+    }
 
     const insertData = {
       id: crypto.randomUUID(),
@@ -737,6 +856,8 @@ async function saveMessageToSession(
       role: message.role,
       content: contentData,
       tool_calls: message.tool_calls || message.toolCalls || null,
+      token_usage:
+        tokenUsagePayload === undefined ? null : tokenUsagePayload,
     };
 
     console.log(

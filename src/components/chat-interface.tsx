@@ -2536,75 +2536,104 @@ export function ChatInterface({
             user?.id || "anonymous"
           );
           console.log("[prepareSendMessagesRequest] fastMode =", fastMode);
-          let enrichedMessages = messages;
+          const baseMessages = [...messages];
+          let enrichedMessages = baseMessages;
+
           if (libraryContextRef.current.length > 0) {
             const pendingContext = libraryContextRef.current;
             lastSentContextRef.current = pendingContext;
             libraryContextRef.current = [];
 
-            const lastUserIndex = [...messages]
+            const lastUserIndex = baseMessages
               .map((msg) => msg.role)
               .lastIndexOf("user");
 
             if (lastUserIndex !== -1) {
-              enrichedMessages = messages.map((message, index) => {
-                if (index !== lastUserIndex) return message;
+              const targetMessage = baseMessages[lastUserIndex] as any;
 
-                const originalText = (() => {
-                  if (Array.isArray((message as any).parts)) {
-                    const textPart = (message as any).parts.find(
-                      (part: any) =>
-                        part?.type === "text" && typeof part.text === "string"
-                    );
-                    if (textPart) return textPart.text as string;
-                  }
-                  if (typeof (message as any).content === "string") {
-                    return (message as any).content as string;
-                  }
-                  return "";
-                })();
+              const originalText = (() => {
+                if (Array.isArray(targetMessage?.parts)) {
+                  const textPart = (targetMessage as any).parts.find(
+                    (part: any) =>
+                      part?.type === "text" && typeof part.text === "string"
+                  );
+                  if (textPart) return textPart.text as string;
+                }
+                if (typeof targetMessage?.content === "string") {
+                  return targetMessage.content as string;
+                }
+                return "";
+              })();
 
-                const enrichedText = buildLibraryContextInstruction(
-                  originalText,
-                  pendingContext
-                );
+              const enrichedText = buildLibraryContextInstruction(
+                originalText,
+                pendingContext
+              );
 
-                if (Array.isArray((message as any).parts)) {
-                  const updatedParts = (message as any).parts.map((part: any) =>
+              let updatedMessage: typeof targetMessage = targetMessage;
+
+              if (Array.isArray(targetMessage?.parts)) {
+                const updatedParts = (targetMessage as any).parts.map(
+                  (part: any) =>
                     part?.type === "text"
                       ? { ...part, text: enrichedText }
                       : part
-                  );
-                  if (
-                    !updatedParts.some((part: any) => part?.type === "text")
-                  ) {
-                    updatedParts.push({ type: "text", text: enrichedText });
-                  }
-                  return {
-                    ...message,
-                    parts: updatedParts,
-                    contextResources: pendingContext,
-                  } as typeof message;
+                );
+                if (!updatedParts.some((part: any) => part?.type === "text")) {
+                  updatedParts.push({ type: "text", text: enrichedText });
+                }
+                updatedMessage = {
+                  ...targetMessage,
+                  parts: updatedParts,
+                  contextResources: pendingContext,
+                };
+              } else if (typeof targetMessage?.content === "string") {
+                updatedMessage = {
+                  ...targetMessage,
+                  content: enrichedText,
+                  contextResources: pendingContext,
+                };
+              } else if (Array.isArray(targetMessage?.content)) {
+                const updatedContent = (targetMessage as any).content.map(
+                  (part: any) =>
+                    part?.type === "text"
+                      ? { ...part, text: enrichedText }
+                      : part
+                );
+
+                if (
+                  !updatedContent.some((part: any) => part?.type === "text")
+                ) {
+                  updatedContent.push({ type: "text", text: enrichedText });
                 }
 
-                if (typeof (message as any).content === "string") {
-                  return {
-                    ...message,
-                    content: enrichedText,
-                    contextResources: pendingContext,
-                  } as typeof message;
-                }
+                updatedMessage = {
+                  ...targetMessage,
+                  content: updatedContent,
+                  contextResources: pendingContext,
+                };
+              } else {
+                updatedMessage = {
+                  ...targetMessage,
+                  parts: [{ type: "text", text: enrichedText }],
+                  contextResources: pendingContext,
+                };
+              }
 
-                return message;
-              });
+              enrichedMessages = [
+                ...baseMessages.slice(0, lastUserIndex),
+                updatedMessage,
+                ...baseMessages.slice(lastUserIndex + 1),
+              ];
             }
           }
 
           // Convert any pending dropped files into base64 attachments for the API
           let attachments: any[] = [];
+          let attachmentParts: any[] = [];
           try {
             if (Array.isArray(dropzoneFiles) && dropzoneFiles.length > 0) {
-              attachments = await Promise.all(
+              const processed = await Promise.all(
                 dropzoneFiles.map(async (f) => {
                   const buf = await f.arrayBuffer();
                   const dataBase64 = Buffer.from(buf).toString("base64");
@@ -2656,7 +2685,7 @@ export function ChatInterface({
                     });
                   }
 
-                  return {
+                  const attachment = {
                     kind: isImage ? "image" : isPdf ? "pdf" : "file",
                     name: f.name,
                     mediaType:
@@ -2669,12 +2698,83 @@ export function ChatInterface({
                     dataBase64,
                     openaiResult, // This will be null for non-images/non-pdfs, or the OpenAI result for images/pdfs
                   };
+                  const attachmentPart = isImage
+                    ? {
+                        type: "image",
+                        dataBase64,
+                        mimeType:
+                          f.type ||
+                          (isPdf ? "application/pdf" : "image/png"),
+                      }
+                    : {
+                        type: "file",
+                        dataBase64,
+                        mediaType:
+                          f.type ||
+                          (isPdf
+                            ? "application/pdf"
+                            : "application/octet-stream"),
+                        filename: f.name,
+                      };
+
+                  return { attachment, attachmentPart };
                 })
               );
+
+              attachments = processed.map((item) => item.attachment);
+              attachmentParts = processed
+                .map((item) => item.attachmentPart)
+                .filter(Boolean);
             }
           } catch (e) {
             console.warn("Failed to serialize attachments", e);
           }
+
+          if (attachmentParts.length > 0) {
+            const lastUserIndex = enrichedMessages
+              .map((msg) => msg.role)
+              .lastIndexOf("user");
+
+            if (lastUserIndex !== -1) {
+              const targetMessage = enrichedMessages[lastUserIndex] as any;
+
+              const existingParts = (() => {
+                if (Array.isArray(targetMessage?.parts)) {
+                  return (targetMessage as any).parts.map((part: any) =>
+                    part && typeof part === "object" ? { ...part } : part
+                  );
+                }
+                if (Array.isArray(targetMessage?.content)) {
+                  return (targetMessage as any).content.map((part: any) =>
+                    part && typeof part === "object" ? { ...part } : part
+                  );
+                }
+                if (typeof targetMessage?.content === "string") {
+                  return [{ type: "text", text: targetMessage.content }];
+                }
+                return [];
+              })();
+
+              const updatedMessage = {
+                ...targetMessage,
+                parts: [
+                  ...existingParts,
+                  ...attachmentParts.map((part: any) =>
+                    part && typeof part === "object" ? { ...part } : part
+                  ),
+                ],
+              };
+
+              delete (updatedMessage as any).content;
+
+              enrichedMessages = [
+                ...enrichedMessages.slice(0, lastUserIndex),
+                updatedMessage,
+                ...enrichedMessages.slice(lastUserIndex + 1),
+              ];
+            }
+          }
+
           if (user) {
             const supabase = createClient();
             const {
@@ -2738,9 +2838,32 @@ export function ChatInterface({
   useEffect(() => {
     const prevIds = messageIdsRef.current;
     const currentIds = messages.map((msg) => msg.id);
-    const newUserMessage = [...messages]
-      .reverse()
-      .find((msg) => !prevIds.includes(msg.id) && msg.role === "user");
+    const idsChanged =
+      currentIds.length !== prevIds.length ||
+      currentIds.some((id, index) => prevIds[index] !== id);
+    const hasPendingContext = lastSentContextRef.current.length > 0;
+
+    if (!idsChanged && !hasPendingContext) {
+      return;
+    }
+
+    let newUserMessage: HealthcareUIMessage | undefined;
+
+    if (idsChanged) {
+      newUserMessage = [...messages]
+        .reverse()
+        .find((msg) => !prevIds.includes(msg.id) && msg.role === "user");
+    }
+
+    if (!hasPendingContext) {
+      messageIdsRef.current = currentIds;
+      return;
+    }
+
+    if (!newUserMessage) {
+      messageIdsRef.current = currentIds;
+      return;
+    }
 
     setContextResourceMap((prev) => {
       const next: Record<string, SavedItem[]> = {};
@@ -2750,9 +2873,7 @@ export function ChatInterface({
         }
       });
 
-      if (newUserMessage && lastSentContextRef.current.length > 0) {
-        next[newUserMessage.id] = [...lastSentContextRef.current];
-      }
+      next[newUserMessage!.id] = [...lastSentContextRef.current];
 
       const prevKeys = Object.keys(prev);
       const nextKeys = Object.keys(next);
@@ -2767,10 +2888,7 @@ export function ChatInterface({
       return next;
     });
 
-    if (newUserMessage && lastSentContextRef.current.length > 0) {
-      lastSentContextRef.current = [];
-    }
-
+    lastSentContextRef.current = [];
     messageIdsRef.current = currentIds;
   }, [messages]);
 
