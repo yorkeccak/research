@@ -14,178 +14,15 @@ export const maxDuration = 180;
 
 export async function POST(req: Request) {
   try {
-    let requestData;
-    try {
-      requestData = await req.json();
-    } catch (jsonError) {
-      console.error("[Chat API] JSON parsing error:", jsonError);
-      return new Response(
-        JSON.stringify({ error: "Invalid JSON in request body" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
-
     const {
       messages,
       sessionId,
-      attachments,
-    }: {
-      messages: HealthcareUIMessage[];
-      sessionId?: string;
-      attachments?: any[];
-    } = requestData;
+    }: { messages: HealthcareUIMessage[]; sessionId?: string } =
+      await req.json();
     console.log(
       "[Chat API] Incoming messages:",
       JSON.stringify(messages, null, 2)
     );
-
-    // If attachments are present, decode and append them to the last user message as AI SDK parts
-    try {
-      if (Array.isArray(messages) && messages.length > 0) {
-        const lastIdx = messages.map((m: any) => m.role).lastIndexOf("user");
-        const targetIdx = lastIdx >= 0 ? lastIdx : messages.length - 1;
-        const target = messages[targetIdx] as any;
-
-        const normalizeMessageParts = () => {
-          if (Array.isArray(target.parts)) {
-            return target.parts;
-          }
-          if (Array.isArray(target.content)) {
-            const cloned = (target.content as any[]).map((part: any) =>
-              part && typeof part === "object" ? { ...part } : part
-            );
-            target.parts = cloned;
-            delete target.content;
-            return target.parts;
-          }
-          if (typeof target.content === "string") {
-            target.parts = [{ type: "text", text: target.content }];
-            delete target.content;
-            return target.parts;
-          }
-          if (typeof target.text === "string") {
-            target.parts = [{ type: "text", text: target.text }];
-            delete target.text;
-            return target.parts;
-          }
-          target.parts = Array.isArray(target.parts) ? target.parts : [];
-          return target.parts;
-        };
-
-        const hasEmbeddedBase64 =
-          (Array.isArray(target.parts) &&
-            target.parts.some(
-              (part: any) =>
-                part &&
-                typeof part === "object" &&
-                typeof part.dataBase64 === "string" &&
-                part.dataBase64.length > 0
-            )) ||
-          (Array.isArray(target.content) &&
-            target.content.some(
-              (part: any) =>
-                part &&
-                typeof part === "object" &&
-                typeof part.dataBase64 === "string" &&
-                part.dataBase64.length > 0
-            ));
-
-        let embeddedConverted = false;
-
-        if (
-          (Array.isArray(attachments) && attachments.length > 0) ||
-          hasEmbeddedBase64
-        ) {
-          const partsArray = normalizeMessageParts();
-
-          if (Array.isArray(partsArray)) {
-            const convertedParts = partsArray.map((part: any) => {
-              if (
-                part &&
-                typeof part === "object" &&
-                typeof part.dataBase64 === "string" &&
-                part.dataBase64.length > 0
-              ) {
-                const data = Buffer.from(part.dataBase64, "base64");
-                embeddedConverted = true;
-
-                if (part.type === "image") {
-                  const { dataBase64, mimeType, mediaType, ...rest } = part;
-                  return {
-                    ...rest,
-                    type: "image",
-                    image: data,
-                    mimeType: mimeType || mediaType || "image/png",
-                  };
-                }
-
-                if (part.type === "file") {
-                  const { dataBase64, ...rest } = part;
-                  return {
-                    ...rest,
-                    type: "file",
-                    data,
-                    mediaType: part.mediaType || "application/octet-stream",
-                    filename: part.filename || part.name,
-                  };
-                }
-              }
-              return part;
-            });
-
-            target.parts = convertedParts.map((part: any) => {
-              if (part && typeof part === "object" && "dataBase64" in part) {
-                const { dataBase64, ...rest } = part;
-                return rest;
-              }
-              return part;
-            });
-          }
-        }
-
-        if (
-          Array.isArray(attachments) &&
-          attachments.length > 0 &&
-          !embeddedConverted
-        ) {
-          const decodedParts = attachments.map((att: any) => {
-            const data = Buffer.from(att.dataBase64 || "", "base64");
-            if (att.kind === "image") {
-              return {
-                type: "image",
-                image: data,
-                mimeType: att.mediaType || "image/png",
-              };
-            }
-            return {
-              type: "file",
-              data,
-              mediaType: att.mediaType || "application/octet-stream",
-              filename: att.name || undefined,
-            };
-          });
-
-          if (Array.isArray(target.parts)) {
-            target.parts = [...target.parts, ...decodedParts];
-          } else if (typeof target.content === "string") {
-            target.parts = [
-              { type: "text", text: target.content },
-              ...decodedParts,
-            ];
-            delete target.content;
-          } else if (Array.isArray(target.content)) {
-            target.content = [...target.content, ...decodedParts];
-          } else {
-            target.parts = decodedParts;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to merge attachments into message", e);
-    }
 
     // Determine if this is a user-initiated message (should count towards rate limit)
     // ONLY increment for the very first user message in a conversation
@@ -324,59 +161,92 @@ export async function POST(req: Request) {
     let modelInfo: string;
 
     if (isDevelopment) {
-      // Development mode: Use OpenAI by default, only use Ollama when explicitly requested
-      const userPreferredModel = req.headers.get("x-ollama-model");
+      // Development mode: Try to use Ollama first, fallback to OpenAI
+      try {
+        // Try to connect to Ollama first
+        const ollamaResponse = await fetch(`${ollamaBaseUrl}/api/tags`, {
+          method: "GET",
+          signal: AbortSignal.timeout(3000), // 3 second timeout
+        });
 
-      if (userPreferredModel) {
-        // User explicitly wants to use Ollama - check if it's available
-        try {
-          const ollamaResponse = await fetch(`${ollamaBaseUrl}/api/tags`, {
-            method: "GET",
-            signal: AbortSignal.timeout(3000), // 3 second timeout
-          });
+        if (ollamaResponse.ok) {
+          const data = await ollamaResponse.json();
+          const models = data.models || [];
 
-          if (ollamaResponse.ok) {
-            const data = await ollamaResponse.json();
-            const models = data.models || [];
+          if (models.length > 0) {
+            // Prioritize Llama 3.1 which is explicitly listed as supporting tools
+            const preferredModels = [
+              "llama3.1",
+              "gemma3:4b",
+              "gemma3",
+              "llama3.2",
+              "llama3",
+              "qwen2.5",
+              "codestral",
+              "deepseek-r1",
+            ];
+            let selectedModelName = models[0].name;
 
-            if (models.some((m: any) => m.name === userPreferredModel)) {
-              console.log(
-                `[Chat API] Using requested Ollama model: ${userPreferredModel}`
-              );
+            // Check if user has a specific model preference from the request
+            const userPreferredModel = req.headers.get("x-ollama-model");
 
-              const ollamaAsOpenAI = createOpenAI({
-                baseURL: `${ollamaBaseUrl}/v1`,
-                apiKey: "ollama",
-              });
-
-              selectedModel = ollamaAsOpenAI.chat(userPreferredModel);
-              modelInfo = `Ollama (${userPreferredModel}) - Development Mode`;
+            // Try to find a preferred model
+            if (
+              userPreferredModel &&
+              models.some((m: any) => m.name === userPreferredModel)
+            ) {
+              selectedModelName = userPreferredModel;
             } else {
-              throw new Error(
-                `Requested model ${userPreferredModel} not found in Ollama`
-              );
+              for (const preferred of preferredModels) {
+                if (models.some((m: any) => m.name.includes(preferred))) {
+                  selectedModelName = models.find((m: any) =>
+                    m.name.includes(preferred)
+                  )?.name;
+                  break;
+                }
+              }
             }
-          } else {
-            throw new Error(
-              `Ollama API responded with status ${ollamaResponse.status}`
+
+            // Debug: Log the exact configuration
+            console.log(
+              `[Chat API] Attempting to configure Ollama with baseURL: ${ollamaBaseUrl}/v1`
             );
+            console.log(`[Chat API] Selected model name: ${selectedModelName}`);
+
+            // Use OpenAI provider and explicitly create a chat model (not responses model)
+            const ollamaAsOpenAI = createOpenAI({
+              baseURL: `${ollamaBaseUrl}/v1`, // This should hit /v1/chat/completions
+              apiKey: "ollama", // Dummy API key for Ollama
+            });
+
+            // Create a chat model explicitly
+            selectedModel = ollamaAsOpenAI.chat(selectedModelName);
+            modelInfo = `Ollama (${selectedModelName}) - Development Mode`;
+            console.log(
+              `[Chat API] Created model with provider:`,
+              typeof selectedModel
+            );
+            console.log(
+              `[Chat API] Model baseURL should be: ${ollamaBaseUrl}/v1`
+            );
+          } else {
+            throw new Error("No models available in Ollama");
           }
-        } catch (error) {
-          console.log(
-            "[Chat API] Requested Ollama model not available, falling back to OpenAI:",
-            error
+        } else {
+          throw new Error(
+            `Ollama API responded with status ${ollamaResponse.status}`
           );
-          selectedModel = hasOpenAIKey ? openai("gpt-5") : "openai/gpt-5";
-          modelInfo = hasOpenAIKey
-            ? "OpenAI (gpt-5) - Development Mode (Ollama Fallback)"
-            : 'Vercel AI Gateway ("gpt-5") - Development Mode (Ollama Fallback)';
         }
-      } else {
-        // Default to OpenAI in development mode
+      } catch (error) {
+        console.log(
+          "[Chat API] Ollama not available, falling back to OpenAI:",
+          error
+        );
+        // Fallback to OpenAI in development mode
         selectedModel = hasOpenAIKey ? openai("gpt-5") : "openai/gpt-5";
         modelInfo = hasOpenAIKey
-          ? "OpenAI (gpt-5) - Development Mode Default"
-          : 'Vercel AI Gateway ("gpt-5") - Development Mode Default';
+          ? "OpenAI (gpt-5) - Development Mode Fallback"
+          : 'Vercel AI Gateway ("gpt-5") - Development Mode Fallback';
       }
     } else {
       // Production mode: Use Polar-wrapped OpenAI ONLY for pay-per-use users
@@ -433,30 +303,12 @@ export async function POST(req: Request) {
         "[Chat API] Attempting to save user message to session:",
         sessionId
       );
-      console.log("[Chat API] User ID:", user.id);
       console.log("[Chat API] Message to save:", messages[messages.length - 1]);
-      console.log("[Chat API] Supabase client created:", !!supabase);
-      console.log("[Chat API] Message format check:", {
-        hasRole: !!messages[messages.length - 1]?.role,
-        hasContent: !!(messages[messages.length - 1] as any)?.content,
-        hasParts: !!messages[messages.length - 1]?.parts,
-        messageKeys: Object.keys(messages[messages.length - 1] || {}),
-      });
-
-      try {
-        await saveMessageToSession(
-          supabase,
-          sessionId,
-          messages[messages.length - 1]
-        );
-        console.log("[Chat API] Message save attempt completed");
-      } catch (error) {
-        console.error("[Chat API] Error during message save:", error);
-        console.error(
-          "[Chat API] Error stack:",
-          error instanceof Error ? error.stack : "No stack trace"
-        );
-      }
+      await saveMessageToSession(
+        supabase,
+        sessionId,
+        messages[messages.length - 1]
+      );
     } else {
       console.log(
         "[Chat API] Not saving message - user:",
@@ -464,12 +316,6 @@ export async function POST(req: Request) {
         "sessionId:",
         sessionId
       );
-      if (!user) {
-        console.log("[Chat API] No user found for message saving");
-      }
-      if (!sessionId) {
-        console.log("[Chat API] No sessionId found for message saving");
-      }
     }
 
     console.log(
@@ -834,23 +680,9 @@ async function saveMessageToSession(
 ) {
   try {
     console.log(
-      "[saveMessageToSession] Starting save process for sessionId:",
-      sessionId
-    );
-    console.log(
       "[saveMessageToSession] Raw message:",
       JSON.stringify(message, null, 2)
     );
-
-    // Validate required fields
-    if (!sessionId) {
-      console.error("[saveMessageToSession] No sessionId provided");
-      return;
-    }
-    if (!message || !message.role) {
-      console.error("[saveMessageToSession] Invalid message format:", message);
-      return;
-    }
 
     // Handle different message formats
     let content = [];
@@ -871,102 +703,19 @@ async function saveMessageToSession(
       content = [{ type: "text", text: message.text }];
     } else {
       console.log("[saveMessageToSession] No recognized content field found");
-      content = [{ type: "text", text: "No content found" }];
-    }
-
-    // Ensure content is properly formatted for database storage
-    const contentData = content;
-
-    const existingTokenUsage =
-      message.token_usage ?? message.tokenUsage ?? null;
-
-    let tokenUsagePayload: any =
-      existingTokenUsage && typeof existingTokenUsage === "object"
-        ? { ...existingTokenUsage }
-        : existingTokenUsage ?? null;
-
-    if (message.contextResources) {
-      if (
-        tokenUsagePayload &&
-        typeof tokenUsagePayload === "object" &&
-        !Array.isArray(tokenUsagePayload)
-      ) {
-        tokenUsagePayload = {
-          ...tokenUsagePayload,
-          contextResources: message.contextResources,
-        };
-      } else {
-        tokenUsagePayload = {
-          contextResources: message.contextResources,
-        };
-      }
     }
 
     const insertData = {
-      id: crypto.randomUUID(),
       session_id: sessionId,
       role: message.role,
-      content: contentData,
+      content: content,
       tool_calls: message.tool_calls || message.toolCalls || null,
-      token_usage: tokenUsagePayload === undefined ? null : tokenUsagePayload,
     };
-
-    console.log(
-      "[saveMessageToSession] Content data structure:",
-      JSON.stringify(contentData, null, 2)
-    );
 
     console.log(
       "[saveMessageToSession] Inserting data:",
       JSON.stringify(insertData, null, 2)
     );
-
-    // Check if session exists first
-    console.log("[saveMessageToSession] Checking if session exists...");
-    const { data: sessionData, error: sessionError } = await supabase
-      .from("chat_sessions")
-      .select("id")
-      .eq("id", sessionId)
-      .single();
-
-    if (sessionError) {
-      console.error(
-        "[saveMessageToSession] Session does not exist:",
-        sessionError
-      );
-      console.log(
-        "[saveMessageToSession] Waiting 100ms and retrying session check..."
-      );
-
-      // Wait a bit for session to be fully created
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Retry session check
-      const { data: retrySessionData, error: retrySessionError } =
-        await supabase
-          .from("chat_sessions")
-          .select("id")
-          .eq("id", sessionId)
-          .single();
-
-      if (retrySessionError) {
-        console.error(
-          "[saveMessageToSession] Session still does not exist after retry:",
-          retrySessionError
-        );
-        console.log(
-          "[saveMessageToSession] Cannot save message - session must be created first"
-        );
-        return;
-      } else {
-        console.log(
-          "[saveMessageToSession] Session exists after retry:",
-          retrySessionData
-        );
-      }
-    } else {
-      console.log("[saveMessageToSession] Session exists:", sessionData);
-    }
 
     const { data, error } = await supabase
       .from("chat_messages")
@@ -979,18 +728,10 @@ async function saveMessageToSession(
         "[saveMessageToSession] Error details:",
         JSON.stringify(error, null, 2)
       );
-      console.error("[saveMessageToSession] Error code:", error.code);
-      console.error("[saveMessageToSession] Error message:", error.message);
-      console.error("[saveMessageToSession] Error hint:", error.hint);
     } else {
       console.log("[saveMessageToSession] Successfully saved message:", data);
-      console.log("[saveMessageToSession] Saved message ID:", data?.[0]?.id);
     }
   } catch (error) {
     console.error("[saveMessageToSession] Exception:", error);
-    console.error(
-      "[saveMessageToSession] Exception stack:",
-      error instanceof Error ? error.stack : "No stack trace"
-    );
   }
 }
