@@ -1,10 +1,10 @@
 # Research Assistant
 
-> **A comprehensive AI research assistant with access to patent search, academic literature, clinical trials, and document processing** - Search across multiple authoritative data sources through natural language. Powered by Valyu's unified search API.
+> **The world's most powerful open-source research AI assistant** — Explore the entire PubMed, arXiv, and ClinicalTrials.gov databases, continuously updated; summarize papers, compare studies, and generate insights across medicine, biology, and AI research — all through natural conversation.
 
-🚀 **[Try the live demo](https://research.valyu.network)**
+🚀 **[Try the live demo](https://research.valyu.ai)**
 
-![Research Assistant](public/valyu.png)
+![Research Assistant](public/research.png)
 
 ## Why Research Assistant?
 
@@ -44,7 +44,7 @@ Research is fragmented across dozens of databases and platforms. This assistant 
 - Node.js 18+
 - npm or yarn
 - OpenAI API key
-- Valyu API key (get one at [platform.valyu.network](https://platform.valyu.network))
+- Valyu API key (get one at [platform.valyu.ai](https://platform.valyu.ai))
 - Daytona API key (for code execution)
 
 **For Local AI Models:**
@@ -58,8 +58,8 @@ Research is fragmented across dozens of databases and platforms. This assistant 
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/yorkeccak/bio.git
-   cd bio
+   git clone https://github.com/yourusername/research.git
+   cd research
    ```
 
 2. **Install dependencies**
@@ -88,9 +88,8 @@ Research is fragmented across dozens of databases and platforms. This assistant 
    NEXT_PUBLIC_APP_URL=http://localhost:3000  # Your deployment URL in production
 
    # Ollama Configuration (Optional - for local models)
-   # By default, Ollama support is DISABLED for production mode
-   # To enable Ollama support, uncomment the line below:
-   # APP_MODE=development  # Enable local model support
+   # Set to 'development' for local model support, 'production' for cloud-only
+   NEXT_PUBLIC_APP_MODE=development  # or 'production'
    OLLAMA_BASE_URL=http://localhost:11434  # Default Ollama URL
    ```
 
@@ -202,7 +201,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 🙏 Acknowledgments
 
-- Built with [Valyu](https://platform.valyu.network) - The unified research data API
+- Built with [Valyu](https://platform.valyu.ai) - The unified research data API
 - Powered by [Daytona](https://daytona.io) - Secure code execution
 - UI components from [shadcn/ui](https://ui.shadcn.com)
 
@@ -215,5 +214,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 <p align="center">
   <a href="https://twitter.com/ValyuNetwork">Twitter</a> •
   <a href="https://www.linkedin.com/company/valyu-network">LinkedIn</a> •
-  <a href="https://github.com/yorkeccak/bio">GitHub</a>
+  <a href="https://research.valyu.ai">Research App</a>
 </p>

@@ -40,6 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# cache files
+news-cache.json
+
 AGENTS.MD
 .mcp.json
 IMPLEMENTATION_SPEC.md

@@ -695,11 +695,11 @@ function HomeContent() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        ) : (
-          <Button onClick={() => setShowAuthModal(true)} size="sm">
-            Sign In
-          </Button>
-        )}
+        ) : null
+          // <Button onClick={() => setShowAuthModal(true)} size="sm">
+          //   Sign In
+          // </Button>
+        }
       </div>
 
       {/* Top Left - New Chat Button and Session Info */}
