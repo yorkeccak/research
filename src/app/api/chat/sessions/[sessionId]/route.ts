@@ -56,24 +56,42 @@ export async function GET(
     JSON.stringify({
       session,
       messages: messages.map((msg) => {
-        // Handle both old format (content as parts) and new format (content with parts and contextResources)
-        let parts = msg.content;
-        let contextResources = null;
+        // Handle both old format (content as parts) and new format (plain parts array)
+        let contextResources: any = null;
+        let parts: any = msg.content;
 
-        if (
+        if (Array.isArray(msg.content)) {
+          parts = msg.content;
+        } else if (
           msg.content &&
           typeof msg.content === "object" &&
           "parts" in msg.content
         ) {
-          parts = msg.content.parts;
-          contextResources = msg.content.contextResources;
+          parts = (msg.content as any).parts;
+          contextResources = (msg.content as any).contextResources ?? null;
+        } else if (typeof msg.content === "string") {
+          parts = [{ type: "text", text: msg.content }];
+        }
+
+        if (!Array.isArray(parts)) {
+          parts = [{ type: "text", text: "No content found" }];
+        }
+
+        if (
+          !contextResources &&
+          msg.token_usage &&
+          typeof msg.token_usage === "object" &&
+          !Array.isArray(msg.token_usage) &&
+          "contextResources" in msg.token_usage
+        ) {
+          contextResources = (msg.token_usage as any).contextResources ?? null;
         }
 
         return {
           id: msg.id,
           role: msg.role,
-          parts: parts,
-          contextResources: contextResources,
+          parts,
+          contextResources,
           toolCalls: msg.tool_calls,
           createdAt: msg.created_at,
         };
