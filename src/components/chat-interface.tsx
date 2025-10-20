@@ -3634,6 +3634,7 @@ export function ChatInterface({
   // Removed startNewChat function - using parent's handleNewChat via URL management
 
   const isLoading = status === "submitted" || status === "streaming";
+  const shouldShowBottomLoader = isLoading;
   const canStop = status === "submitted" || status === "streaming";
   const canRegenerate =
     (status === "ready" || status === "error") && messages.length > 0;
@@ -4580,13 +4581,7 @@ export function ChatInterface({
                                                         }
                                                       );
                                                     }
-                                                  } catch (error) {
-                                                    console.error(
-                                                      "Error extracting citations from tool:",
-                                                      p.type,
-                                                      error
-                                                    );
-                                                  }
+                                                  } catch (error) {}
                                                 }
                                               }
 
@@ -5514,6 +5509,22 @@ export function ChatInterface({
                       </div>
                     </motion.div>
                   )}
+              </AnimatePresence>
+
+              <AnimatePresence>
+                {shouldShowBottomLoader && (
+                  <motion.div
+                    key="chat-bottom-loader"
+                    className="mb-6 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                  >
+                    <Loader2 className="h-4 w-4 animate-spin text-gray-400 dark:text-gray-500" />
+                    <span>Searching with Valyu...</span>
+                  </motion.div>
+                )}
               </AnimatePresence>
 
               <div ref={messagesEndRef} />
