@@ -383,31 +383,50 @@ const MemoizedMarkdown = memo(function MemoizedMarkdown({
 });
 
 // Helper function to extract search results for carousel display
-const extractSearchResults = (jsonOutput: string) => {
+const extractSearchResults = (
+  jsonOutput: string | Record<string, any> | null | undefined
+) => {
   try {
-    // Check if the output is a plain text error message
-    if (
-      typeof jsonOutput === "string" &&
-      (jsonOutput.startsWith("🔍") ||
-        jsonOutput.startsWith("❌") ||
-        jsonOutput.startsWith("⏱️") ||
-        jsonOutput.startsWith("🔐") ||
-        jsonOutput.startsWith("🌐") ||
-        jsonOutput.startsWith("💰") ||
-        jsonOutput.includes("No research results found") ||
-        jsonOutput.includes("No web results found") ||
-        jsonOutput.includes("No clinical trials found") ||
-        jsonOutput.includes("Error") ||
-        jsonOutput.includes("Failed to"))
-    ) {
-      // This is a plain text error message, not JSON
+    if (jsonOutput === null || jsonOutput === undefined) {
       return [];
     }
 
-    const data = JSON.parse(jsonOutput);
+    const isStringOutput = typeof jsonOutput === "string";
+    const textOutput = isStringOutput ? jsonOutput.trim() : "";
 
-    if (data.results && Array.isArray(data.results)) {
-      const mappedResults = data.results.map((result: any, index: number) => {
+    if (isStringOutput) {
+      // Check if the output is a plain text error message
+      if (
+        textOutput.startsWith("🔍") ||
+        textOutput.startsWith("❌") ||
+        textOutput.startsWith("⏱️") ||
+        textOutput.startsWith("🔐") ||
+        textOutput.startsWith("🌐") ||
+        textOutput.startsWith("💰") ||
+        textOutput.includes("No research results found") ||
+        textOutput.includes("No web results found") ||
+        textOutput.includes("No clinical trials found") ||
+        textOutput.includes("Error") ||
+        textOutput.includes("Failed to")
+      ) {
+        // This is a plain text error message, not JSON
+        return [];
+      }
+    }
+
+    const data =
+      !isStringOutput || textOutput === ""
+        ? jsonOutput ?? {}
+        : JSON.parse(textOutput);
+
+    const rawResults = Array.isArray(data)
+      ? data
+      : Array.isArray((data as any).results)
+      ? (data as any).results
+      : [];
+
+    if (rawResults.length > 0) {
+      const mappedResults = rawResults.map((result: any, index: number) => {
         // Handle different result structures
         // Clinical trials overview has fields directly on result (nct_id, brief_summary, etc.)
         // Other tools have content field that might be string or object
@@ -485,9 +504,22 @@ const extractSearchResults = (jsonOutput: string) => {
 };
 
 // Helper function to extract chart data for display
-const extractChartData = (jsonOutput: string) => {
+const extractChartData = (
+  jsonOutput: string | Record<string, any> | null | undefined
+) => {
   try {
-    const data = JSON.parse(jsonOutput);
+    if (jsonOutput === null || jsonOutput === undefined) {
+      return null;
+    }
+
+    const isStringOutput = typeof jsonOutput === "string";
+    const textOutput = isStringOutput ? jsonOutput.trim() : "";
+    const data: any =
+      !isStringOutput
+        ? jsonOutput ?? {}
+        : textOutput === ""
+        ? {}
+        : JSON.parse(textOutput);
 
     if (data.chartType && data.dataSeries) {
       return {
